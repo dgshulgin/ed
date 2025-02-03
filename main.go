@@ -133,22 +133,79 @@ var commands map[byte]Handler = map[byte]Handler{
 }
 
 func (state *State) parseCommand(line []byte) (*Command, error) {
-
 	data := line
-
 	if len(data) > 1 { //remove prefix .
 		data = data[1:]
 	}
-	cname := data[0]
-	handler, ok := commands[cname]
-	if !ok || handler == nil {
-		return nil, errors.New("Command unknown!")
+
+	if peekDot(data) {
+		//ret Command
+		cname := data[0]
+		handler, _ := commands[cname]
+		return &Command{name: string(cname), args: nil, handler: handler}, nil
 	}
-	tail := strings.TrimSpace(string(data[1:]))
-	args := strings.Fields(tail)
-	cmd := Command{name: string(cname), args: args, handler: handler}
-	return &cmd, nil
+	if peekLetter(data) {
+		//get command's letter
+		cname := data[0]
+		handler, ok := commands[cname]
+		if !ok || handler == nil {
+			return nil, errors.New("Command unknown!")
+		}
+		//fix addr
+		args := make([]string, 0)
+		args = append(args, fmt.Sprintf("%d", 1))
+		args = append(args, fmt.Sprintf("%d", len(state.buffer)-1))
+		//get tail
+		tail := strings.TrimSpace(string(data[1:]))
+		args = append(args, strings.Fields(tail)...)
+		//ret Command
+		return &Command{name: string(cname), args: args, handler: handler}, nil
+	}
+	if peekAddr(data) {
+		//parse address
+		// recalc addr in buffer
+		//TODO pre-calc position at data before peekLetter call
+		if peekLetter(data) {
+			//get command's letter
+			cname := data[0]
+			handler, ok := commands[cname]
+			if !ok || handler == nil {
+				return nil, errors.New("Command unknown!")
+			}
+			//TODO fix addr
+			args := make([]string, 0)
+			args = append(args, fmt.Sprintf("%d", 0))
+			args = append(args, fmt.Sprintf("%d", 0))
+			//get tail
+			// TODO pre-calc tail's position!!
+			tail := strings.TrimSpace(string(data[1:]))
+			args = append(args, strings.Fields(tail)...)
+			//ret Command
+			return &Command{name: string(cname), args: args, handler: handler}, nil
+		}
+	}
+
+	//ret Error
+	return nil, errors.New("command unknown or syntax error")
 }
+
+// func (state *State) parseCommand(line []byte) (*Command, error) {
+
+// 	data := line
+
+// 	if len(data) > 1 { //remove prefix .
+// 		data = data[1:]
+// 	}
+// 	cname := data[0]
+// 	handler, ok := commands[cname]
+// 	if !ok || handler == nil {
+// 		return nil, errors.New("Command unknown!")
+// 	}
+// 	tail := strings.TrimSpace(string(data[1:]))
+// 	args := strings.Fields(tail)
+// 	cmd := Command{name: string(cname), args: args, handler: handler}
+// 	return &cmd, nil
+// }
 
 func (state *State) HandleCommand(line []byte) error {
 	cmd, err := state.parseCommand(line)
@@ -237,4 +294,19 @@ func writeFile(filename string, buffer []string) error {
 	os.Rename(filename+".swp", filename)
 
 	return nil
+}
+
+// peekDot Checks if the raw command leine is the only '.' symbol
+func peekDot([]byte) bool {
+	return false
+}
+
+// peekLetter Checks if the raw command line starts with one of the command's list
+func peekLetter([]byte) bool {
+	return false
+}
+
+// paarAddr Checks if the raw command line starts with numbers, ^ or $ and sets address or range for the [possible] command.
+func peekAddr([]byte) bool {
+	return false
 }
