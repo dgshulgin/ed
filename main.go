@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // режим работы редактора: редактирование/добавление/вставка и режим исполнения команд
@@ -69,14 +72,34 @@ func (state *State) new([]string) error {
 	return nil
 }
 
-func (state *State) print([]string) error {
+func (state *State) print(args []string) error {
 	if len(state.buffer) == 0 {
 		return errors.New("text buffer is empty!")
 	}
+	// в аргументах гарантированно - цифры, поэтому игнорируем ошибку
+	top, _ := strconv.Atoi(args[0])
+	last, _ := strconv.Atoi(args[1])
 
-	for li, line := range state.buffer {
+	top--
+	last--
+
+	if top < 0 {
+		top = 0
+	}
+	if last < 0 {
+		last = top + 1
+	} else {
+		last++
+	}
+	if last > len(state.buffer) {
+		last = len(state.buffer)
+	}
+
+	li := top
+	for _, line := range state.buffer[top:last] {
 		if state.lineNumbers {
 			fmt.Printf("%-4d%s\n", li+1, line)
+			li++
 		} else {
 			fmt.Printf("%s\n", line)
 		}
@@ -133,52 +156,59 @@ var commands map[byte]Handler = map[byte]Handler{
 }
 
 func (state *State) parseCommand(line []byte) (*Command, error) {
-	data := line
-	if len(data) > 1 { //remove prefix .
-		data = data[1:]
+	//data := line
+	if len(line) > 1 { //remove prefix .
+		line = line[1:]
 	}
-
-	if peekDot(data) {
+	if peekDot(line) {
 		//ret Command
-		cname := data[0]
+		cname := line[0]
 		handler, _ := commands[cname]
 		return &Command{name: string(cname), args: nil, handler: handler}, nil
 	}
-	if peekLetter(data) {
+	if peekLetter(line) {
+		var top, last int = 0, len(state.buffer)
+
 		//get command's letter
-		cname := data[0]
+		cname := line[0]
 		handler, ok := commands[cname]
 		if !ok || handler == nil {
 			return nil, errors.New("Command unknown!")
 		}
 		//fix addr
 		args := make([]string, 0)
-		args = append(args, fmt.Sprintf("%d", 1))
-		args = append(args, fmt.Sprintf("%d", len(state.buffer)-1))
+		args = append(args, fmt.Sprintf("%d", top))
+		args = append(args, fmt.Sprintf("%d", last))
 		//get tail
-		tail := strings.TrimSpace(string(data[1:]))
+		tail := strings.TrimSpace(string(line[1:]))
 		args = append(args, strings.Fields(tail)...)
 		//ret Command
 		return &Command{name: string(cname), args: args, handler: handler}, nil
 	}
-	if peekAddr(data) {
+	if peekAddr(line) {
 		//parse address
-		// recalc addr in buffer
-		//TODO pre-calc position at data before peekLetter call
-		if peekLetter(data) {
+		var top, last int = -1, -1
+		top = state.matchHere(&line)
+		if line[0] == ',' {
+			line = line[1:]
+			last = state.matchHere(&line)
+
+		}
+
+		if peekLetter(line) {
 			//get command's letter
-			cname := data[0]
+			cname := line[0]
 			handler, ok := commands[cname]
 			if !ok || handler == nil {
 				return nil, errors.New("Command unknown!")
 			}
-			//TODO fix addr
+			// set up address args
 			args := make([]string, 0)
-			args = append(args, fmt.Sprintf("%d", 0))
-			args = append(args, fmt.Sprintf("%d", 0))
+			args = append(args, fmt.Sprintf("%d", top))
+			args = append(args, fmt.Sprintf("%d", last))
 			//get tail
 			// TODO pre-calc tail's position!!
-			tail := strings.TrimSpace(string(data[1:]))
+			tail := strings.TrimSpace(string(line[1:]))
 			args = append(args, strings.Fields(tail)...)
 			//ret Command
 			return &Command{name: string(cname), args: args, handler: handler}, nil
@@ -244,6 +274,95 @@ func main() {
 		}
 	}
 }
+
+// peekDot Checks if the raw command line is the only '.' symbol
+func peekDot(data []byte) bool {
+	r, _ := utf8.DecodeRune(data)
+	if r == utf8.RuneError {
+		return false
+	}
+	if r == '.' {
+		return true
+	}
+	return false
+}
+
+// peekLetter Checks if the raw command line starts with one of the command's list
+func peekLetter(data []byte) bool {
+	r, _ := utf8.DecodeRune(data)
+	if r == utf8.RuneError {
+		return false
+	}
+	return unicode.IsLetter(r)
+}
+
+// peekAddr Checks if the raw command line starts with numbers, ^ or $ and sets address or range for the [possible] command.
+func peekAddr(data []byte) bool {
+	r, _ := utf8.DecodeRune(data)
+	if '^' == r || ',' == r || unicode.IsDigit(r) {
+		return true
+	}
+	return false
+}
+
+// Address pattern: M-+D
+// 1p			0*p
+// 1,10p       0*,0*p
+// ,10p		,0*p
+// ^,$p		^,$p
+// ^+1,$p		^+0*,$p
+// ^,$-1p		^,$-0*p
+
+// 0*
+// ^+0*
+// $-0*
+
+func (state *State) matchHere(data *[]byte) int {
+	var pos int
+
+	switch (*data)[0] {
+	case '^':
+		pos = 1
+		*data = (*data)[1:]
+	case '$':
+		pos = len(state.buffer)
+		*data = (*data)[1:]
+	default:
+		pos = 0
+	}
+
+	var dir int
+	switch (*data)[0] {
+	case '-':
+		dir = -1
+		*data = (*data)[1:]
+	case '+':
+		dir = 1
+		*data = (*data)[1:]
+	default:
+		dir = 1
+	}
+
+	var nn map[byte]int = map[byte]int{'1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '0': 0}
+	var acc int = 0
+	p := 0
+
+	for {
+		v, ok := nn[(*data)[p]]
+		if !ok {
+			break
+		}
+		acc = acc*10 + v
+		p++
+	}
+	*data = (*data)[p:]
+
+	acc *= dir
+	pos += acc
+
+	return pos
+}
+
 func readFile(filename string) ([]string, error) {
 	file, err := os.OpenFile(filename, os.O_RDONLY, 0666)
 	if err != nil {
@@ -294,19 +413,4 @@ func writeFile(filename string, buffer []string) error {
 	os.Rename(filename+".swp", filename)
 
 	return nil
-}
-
-// peekDot Checks if the raw command leine is the only '.' symbol
-func peekDot([]byte) bool {
-	return false
-}
-
-// peekLetter Checks if the raw command line starts with one of the command's list
-func peekLetter([]byte) bool {
-	return false
-}
-
-// paarAddr Checks if the raw command line starts with numbers, ^ or $ and sets address or range for the [possible] command.
-func peekAddr([]byte) bool {
-	return false
 }
